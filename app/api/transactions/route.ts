@@ -3,7 +3,9 @@ import { prisma } from "@/lib/prisma"
 
 export async function POST(req: Request) {
   try {
-    const { description, amount, type, category, accountId } = await req.json()
+    const { description, amount, type, category, accountId, userId: bodyUserId } = await req.json()
+    const userId = req.headers.get("x-user-id") || bodyUserId || "usr_default"
+
     if (!description || !amount || amount <= 0 || !type || !accountId) {
       return NextResponse.json({ error: "Invalid data" }, { status: 400 })
     }
@@ -20,6 +22,7 @@ export async function POST(req: Request) {
           type,
           category,
           accountId,
+          userId,
           date: now,
           status: "completed",
         },
@@ -40,7 +43,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ transaction: { ...transaction, date: transaction.date.toISOString() } })
   } catch (error) {
     console.error("POST /api/transactions Error:", error)
-    return NextResponse.json({ error: "Failed to create transaction" }, { status: 500 })
+    return NextResponse.json({ error: "Failed to create isolated transaction" }, { status: 500 })
   }
 }
 
@@ -48,9 +51,10 @@ export async function DELETE(req: Request) {
   try {
     const { searchParams } = new URL(req.url)
     const id = searchParams.get("id")
+    const userId = req.headers.get("x-user-id") || searchParams.get("userId") || "usr_default"
     if (!id) return NextResponse.json({ error: "Missing id" }, { status: 400 })
 
-    const existingTx = await prisma.transaction.findUnique({ where: { id } })
+    const existingTx = await prisma.transaction.findFirst({ where: { id, userId } })
     if (!existingTx) return NextResponse.json({ error: "Transaction not found" }, { status: 404 })
 
     await prisma.$transaction(async (tx) => {

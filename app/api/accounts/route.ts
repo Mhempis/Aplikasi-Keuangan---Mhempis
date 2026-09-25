@@ -3,16 +3,19 @@ import { prisma } from "@/lib/prisma"
 
 export async function POST(req: Request) {
   try {
-    const { name, balance } = await req.json()
+    const { name, balance, userId: bodyUserId } = await req.json()
+    const userId = req.headers.get("x-user-id") || bodyUserId || "usr_default"
+
     if (!name) return NextResponse.json({ error: "Account name is required" }, { status: 400 })
 
-    const id = `acc_${Date.now()}`
+    const id = `acc_${Date.now()}_${userId}`
     const account = await prisma.account.create({
       data: {
         id,
         name,
         balance: parseFloat(balance) || 0,
         updatedAt: new Date(),
+        userId,
       },
     })
 
@@ -25,7 +28,8 @@ export async function POST(req: Request) {
 
 export async function PUT(req: Request) {
   try {
-    const { id, name, balance } = await req.json()
+    const { id, name, balance, userId: bodyUserId } = await req.json()
+    const userId = req.headers.get("x-user-id") || bodyUserId || "usr_default"
     if (!id || !name) return NextResponse.json({ error: "Missing required fields" }, { status: 400 })
 
     const account = await prisma.account.update({
@@ -48,9 +52,10 @@ export async function DELETE(req: Request) {
   try {
     const { searchParams } = new URL(req.url)
     const id = searchParams.get("id")
+    const userId = req.headers.get("x-user-id") || searchParams.get("userId") || "usr_default"
     if (!id) return NextResponse.json({ error: "Missing id" }, { status: 400 })
 
-    const count = await prisma.account.count()
+    const count = await prisma.account.count({ where: { userId } })
     if (count <= 1) return NextResponse.json({ error: "Cannot delete the only account" }, { status: 400 })
 
     await prisma.account.delete({ where: { id } })
@@ -63,13 +68,14 @@ export async function DELETE(req: Request) {
 
 export async function PATCH(req: Request) {
   try {
-    const { fromAccountId, toAccountId, amount } = await req.json()
+    const { fromAccountId, toAccountId, amount, userId: bodyUserId } = await req.json()
+    const userId = req.headers.get("x-user-id") || bodyUserId || "usr_default"
     if (!fromAccountId || !toAccountId || !amount || amount <= 0) {
       return NextResponse.json({ error: "Invalid transfer parameters" }, { status: 400 })
     }
 
-    const fromAcc = await prisma.account.findUnique({ where: { id: fromAccountId } })
-    const toAcc = await prisma.account.findUnique({ where: { id: toAccountId } })
+    const fromAcc = await prisma.account.findFirst({ where: { id: fromAccountId, userId } })
+    const toAcc = await prisma.account.findFirst({ where: { id: toAccountId, userId } })
     if (!fromAcc || !toAcc || fromAcc.balance < parseFloat(amount)) {
       return NextResponse.json({ error: "Insufficient account balance" }, { status: 400 })
     }

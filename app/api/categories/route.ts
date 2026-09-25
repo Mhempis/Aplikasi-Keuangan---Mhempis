@@ -3,7 +3,9 @@ import { prisma } from "@/lib/prisma"
 
 export async function POST(req: Request) {
   try {
-    const { name, type, color } = await req.json()
+    const { name, type, color, userId: bodyUserId } = await req.json()
+    const userId = req.headers.get("x-user-id") || bodyUserId || "usr_default"
+
     if (!name || !type) return NextResponse.json({ error: "Missing required fields" }, { status: 400 })
 
     const category = await prisma.categoryItem.create({
@@ -11,6 +13,7 @@ export async function POST(req: Request) {
         name,
         type,
         color: color || "#3B82F6",
+        userId,
       },
     })
 
@@ -26,10 +29,12 @@ export async function DELETE(req: Request) {
     const { searchParams } = new URL(req.url)
     const name = searchParams.get("name")
     const type = searchParams.get("type")
+    const userId = req.headers.get("x-user-id") || searchParams.get("userId") || "usr_default"
+
     if (!name || !type) return NextResponse.json({ error: "Missing required query params" }, { status: 400 })
 
     await prisma.categoryItem.deleteMany({
-      where: { name, type },
+      where: { name, type, userId },
     })
 
     return NextResponse.json({ message: "Category deleted" })

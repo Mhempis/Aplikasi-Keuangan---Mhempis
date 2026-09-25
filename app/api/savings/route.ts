@@ -3,7 +3,9 @@ import { prisma } from "@/lib/prisma"
 
 export async function POST(req: Request) {
   try {
-    const { name, targetAmount, category, color, accountId, targetDate } = await req.json()
+    const { name, targetAmount, category, color, accountId, targetDate, userId: bodyUserId } = await req.json()
+    const userId = req.headers.get("x-user-id") || bodyUserId || "usr_default"
+
     if (!name || !targetAmount || targetAmount <= 0 || !accountId) {
       return NextResponse.json({ error: "Invalid savings goal data" }, { status: 400 })
     }
@@ -17,6 +19,7 @@ export async function POST(req: Request) {
         category: category || "Lainnya",
         color: color || "#3B82F6",
         accountId,
+        userId,
         targetDate: targetDate ? new Date(targetDate) : null,
       },
     })
@@ -32,12 +35,13 @@ export async function POST(req: Request) {
 
 export async function PUT(req: Request) {
   try {
-    const { type, goalId, amount, fromGoalId, toGoalId } = await req.json()
+    const { type, goalId, amount, fromGoalId, toGoalId, userId: bodyUserId } = await req.json()
+    const userId = req.headers.get("x-user-id") || bodyUserId || "usr_default"
 
     // 1. Deposit to savings
     if (type === "deposit") {
       if (!goalId || !amount || amount <= 0) return NextResponse.json({ error: "Invalid deposit" }, { status: 400 })
-      const goal = await prisma.savingsGoal.findUnique({ where: { id: goalId } })
+      const goal = await prisma.savingsGoal.findFirst({ where: { id: goalId, userId } })
       if (!goal) return NextResponse.json({ error: "Goal not found" }, { status: 404 })
 
       const now = new Date()
@@ -60,6 +64,7 @@ export async function PUT(req: Request) {
             type: "expense",
             category: "Investasi & Dividen",
             accountId: goal.accountId,
+            userId,
             date: now,
             status: "completed",
           },
@@ -72,8 +77,8 @@ export async function PUT(req: Request) {
     // 2. Transfer between savings
     if (type === "transfer") {
       if (!fromGoalId || !toGoalId || !amount || amount <= 0) return NextResponse.json({ error: "Invalid transfer" }, { status: 400 })
-      const fromGoal = await prisma.savingsGoal.findUnique({ where: { id: fromGoalId } })
-      const toGoal = await prisma.savingsGoal.findUnique({ where: { id: toGoalId } })
+      const fromGoal = await prisma.savingsGoal.findFirst({ where: { id: fromGoalId, userId } })
+      const toGoal = await prisma.savingsGoal.findFirst({ where: { id: toGoalId, userId } })
       if (!fromGoal || !toGoal || fromGoal.currentAmount < parseFloat(amount)) {
         return NextResponse.json({ error: "Insufficient funds in source goal" }, { status: 400 })
       }

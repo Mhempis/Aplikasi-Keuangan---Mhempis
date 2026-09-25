@@ -1,6 +1,7 @@
 "use client"
 
 import React, { createContext, useContext, useEffect, useState, useMemo, useCallback } from "react"
+import { useAuth } from "./auth-context"
 import {
   type Account,
   type AccountId,
@@ -15,11 +16,6 @@ import {
   initialCategories,
   CATEGORY_COLORS,
 } from "./finance-data"
-
-const STORAGE_KEY_ACCOUNTS = "pf_dashboard_accounts_v1"
-const STORAGE_KEY_TRANSACTIONS = "pf_dashboard_transactions_v1"
-const STORAGE_KEY_SAVINGS = "pf_dashboard_savings_v1"
-const STORAGE_KEY_CATEGORIES = "pf_dashboard_categories_v1"
 
 interface FinanceContextType {
   accounts: Account[]
@@ -49,48 +45,65 @@ interface FinanceContextType {
 const FinanceContext = createContext<FinanceContextType | undefined>(undefined)
 
 export function FinanceProvider({ children }: { children: React.ReactNode }) {
+  const { user } = useAuth()
+  const userId = user?.id || "usr_default"
+
+  const storageKeyAccounts = `pf_dashboard_accounts_${userId}`
+  const storageKeyTransactions = `pf_dashboard_transactions_${userId}`
+  const storageKeySavings = `pf_dashboard_savings_${userId}`
+  const storageKeyCategories = `pf_dashboard_categories_${userId}`
+
   const [accounts, setAccounts] = useState<Account[]>(initialAccounts)
   const [transactions, setTransactions] = useState<Transaction[]>(initialTransactions)
   const [savingsGoals, setSavingsGoals] = useState<SavingsGoal[]>(initialSavingsGoals)
   const [categories, setCategories] = useState<CategoryItem[]>(initialCategories)
   const [isLoaded, setIsLoaded] = useState(false)
 
-  // 1. Initial load from LocalStorage first for instant UI response
+  // 1. Initial load from isolated LocalStorage per userId
   useEffect(() => {
     try {
-      const savedAccounts = localStorage.getItem(STORAGE_KEY_ACCOUNTS)
-      const savedTx = localStorage.getItem(STORAGE_KEY_TRANSACTIONS)
-      const savedSavings = localStorage.getItem(STORAGE_KEY_SAVINGS)
-      const savedCategories = localStorage.getItem(STORAGE_KEY_CATEGORIES)
+      const savedAccounts = localStorage.getItem(storageKeyAccounts)
+      const savedTx = localStorage.getItem(storageKeyTransactions)
+      const savedSavings = localStorage.getItem(storageKeySavings)
+      const savedCategories = localStorage.getItem(storageKeyCategories)
 
       if (savedAccounts) setAccounts(JSON.parse(savedAccounts))
+      else setAccounts(initialAccounts)
+
       if (savedTx) setTransactions(JSON.parse(savedTx))
+      else setTransactions(initialTransactions)
+
       if (savedSavings) setSavingsGoals(JSON.parse(savedSavings))
+      else setSavingsGoals(initialSavingsGoals)
+
       if (savedCategories) setCategories(JSON.parse(savedCategories))
+      else setCategories(initialCategories)
     } catch (e) {
       console.error("Failed to load local finance data:", e)
     } finally {
       setIsLoaded(true)
     }
-  }, [])
+  }, [userId, storageKeyAccounts, storageKeyTransactions, storageKeySavings, storageKeyCategories])
 
-  // 2. Sync to LocalStorage on every state update
+  // 2. Sync to isolated LocalStorage per userId on state update
   useEffect(() => {
     if (!isLoaded) return
     try {
-      localStorage.setItem(STORAGE_KEY_ACCOUNTS, JSON.stringify(accounts))
-      localStorage.setItem(STORAGE_KEY_TRANSACTIONS, JSON.stringify(transactions))
-      localStorage.setItem(STORAGE_KEY_SAVINGS, JSON.stringify(savingsGoals))
-      localStorage.setItem(STORAGE_KEY_CATEGORIES, JSON.stringify(categories))
+      localStorage.setItem(storageKeyAccounts, JSON.stringify(accounts))
+      localStorage.setItem(storageKeyTransactions, JSON.stringify(transactions))
+      localStorage.setItem(storageKeySavings, JSON.stringify(savingsGoals))
+      localStorage.setItem(storageKeyCategories, JSON.stringify(categories))
     } catch (e) {
       console.error("Failed to save local finance data:", e)
     }
-  }, [accounts, transactions, savingsGoals, categories, isLoaded])
+  }, [accounts, transactions, savingsGoals, categories, isLoaded, storageKeyAccounts, storageKeyTransactions, storageKeySavings, storageKeyCategories])
 
-  // 3. Optional sync from SQLite API
+  // 3. Sync from isolated SQLite API per userId
   const fetchFinanceData = useCallback(async () => {
     try {
-      const res = await fetch("/api/finance")
+      const res = await fetch(`/api/finance?userId=${userId}`, {
+        headers: { "x-user-id": userId },
+      })
       if (res.ok) {
         const data = await res.json()
         if (data.accounts && data.accounts.length > 0) setAccounts(data.accounts)
@@ -99,15 +112,15 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
         if (data.categories && data.categories.length > 0) setCategories(data.categories)
       }
     } catch (e) {
-      console.log("SQLite API fallback to local state")
+      console.log("SQLite API fallback to user local state")
     }
-  }, [])
+  }, [userId])
 
   useEffect(() => {
     fetchFinanceData()
   }, [fetchFinanceData])
 
-  // Actions: Optimistic Instant UI Update + Background API Sync
+  // Isolated Actions with x-user-id header
   const addTransaction = async (newTxData: Omit<Transaction, "id" | "date" | "status">) => {
     const now = new Date().toISOString()
     const newTx: Transaction = {
@@ -117,7 +130,6 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
       status: "completed",
     }
 
-    // Immediate UI Update
     setTransactions((prev) => [newTx, ...prev])
     setAccounts((prev) =>
       prev.map((acc) => {
@@ -129,12 +141,11 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
       })
     )
 
-    // Background API Sync
     try {
       await fetch("/api/transactions", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(newTxData),
+        headers: { "Content-Type": "application/json", "x-user-id": userId },
+        body: JSON.stringify({ ...newTxData, userId }),
       })
     } catch (e) {
       console.log("Background API sync error:", e)
@@ -145,7 +156,6 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
     const tx = transactions.find((t) => t.id === id)
     if (!tx) return
 
-    // Immediate UI Update
     setTransactions((prev) => prev.filter((t) => t.id !== id))
     setAccounts((prev) =>
       prev.map((acc) => {
@@ -157,9 +167,11 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
       })
     )
 
-    // Background API Sync
     try {
-      await fetch(`/api/transactions?id=${id}`, { method: "DELETE" })
+      await fetch(`/api/transactions?id=${id}`, {
+        method: "DELETE",
+        headers: { "x-user-id": userId },
+      })
     } catch (e) {
       console.log("Background API sync error:", e)
     }
@@ -176,8 +188,8 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
     try {
       await fetch("/api/savings", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(newGoal),
+        headers: { "Content-Type": "application/json", "x-user-id": userId },
+        body: JSON.stringify({ ...newGoal, userId }),
       })
     } catch (e) {
       console.log("Background API sync error:", e)
@@ -203,8 +215,8 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
     try {
       await fetch("/api/savings", {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type: "deposit", goalId, amount }),
+        headers: { "Content-Type": "application/json", "x-user-id": userId },
+        body: JSON.stringify({ type: "deposit", goalId, amount, userId }),
       })
     } catch (e) {
       console.log("Background API sync error:", e)
@@ -230,8 +242,8 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
     try {
       await fetch("/api/savings", {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type: "transfer", fromGoalId, toGoalId, amount }),
+        headers: { "Content-Type": "application/json", "x-user-id": userId },
+        body: JSON.stringify({ type: "transfer", fromGoalId, toGoalId, amount, userId }),
       })
     } catch (e) {
       console.log("Background API sync error:", e)
@@ -260,8 +272,8 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
     try {
       await fetch("/api/accounts", {
         method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fromAccountId, toAccountId, amount }),
+        headers: { "Content-Type": "application/json", "x-user-id": userId },
+        body: JSON.stringify({ fromAccountId, toAccountId, amount, userId }),
       })
     } catch (e) {
       console.log("Background API sync error:", e)
@@ -271,7 +283,7 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
   }
 
   const addAccount = async (name: string, initialBalance: number) => {
-    const id = `acc_${Date.now()}`
+    const id = `acc_${Date.now()}_${userId}`
     const newAcc: Account = {
       id,
       name,
@@ -283,8 +295,8 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
     try {
       await fetch("/api/accounts", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, balance: initialBalance }),
+        headers: { "Content-Type": "application/json", "x-user-id": userId },
+        body: JSON.stringify({ name, balance: initialBalance, userId }),
       })
     } catch (e) {
       console.log("Background API sync error:", e)
@@ -299,8 +311,8 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
     try {
       await fetch("/api/accounts", {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id, name, balance }),
+        headers: { "Content-Type": "application/json", "x-user-id": userId },
+        body: JSON.stringify({ id, name, balance, userId }),
       })
     } catch (e) {
       console.log("Background API sync error:", e)
@@ -315,7 +327,10 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
     setAccounts((prev) => prev.filter((acc) => acc.id !== id))
 
     try {
-      await fetch(`/api/accounts?id=${id}`, { method: "DELETE" })
+      await fetch(`/api/accounts?id=${id}`, {
+        method: "DELETE",
+        headers: { "x-user-id": userId },
+      })
     } catch (e) {
       console.log("Background API sync error:", e)
     }
@@ -332,8 +347,8 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
     try {
       await fetch("/api/categories", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, type, color }),
+        headers: { "Content-Type": "application/json", "x-user-id": userId },
+        body: JSON.stringify({ name, type, color, userId }),
       })
     } catch (e) {
       console.log("Background API sync error:", e)
@@ -344,7 +359,10 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
     setCategories((prev) => prev.filter((c) => !(c.name === name && c.type === type)))
 
     try {
-      await fetch(`/api/categories?name=${encodeURIComponent(name)}&type=${type}`, { method: "DELETE" })
+      await fetch(`/api/categories?name=${encodeURIComponent(name)}&type=${type}`, {
+        method: "DELETE",
+        headers: { "x-user-id": userId },
+      })
     } catch (e) {
       console.log("Background API sync error:", e)
     }
@@ -356,14 +374,14 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
     setSavingsGoals(initialSavingsGoals)
     setCategories(initialCategories)
     try {
-      localStorage.removeItem(STORAGE_KEY_ACCOUNTS)
-      localStorage.removeItem(STORAGE_KEY_TRANSACTIONS)
-      localStorage.removeItem(STORAGE_KEY_SAVINGS)
-      localStorage.removeItem(STORAGE_KEY_CATEGORIES)
+      localStorage.removeItem(storageKeyAccounts)
+      localStorage.removeItem(storageKeyTransactions)
+      localStorage.removeItem(storageKeySavings)
+      localStorage.removeItem(storageKeyCategories)
       await fetch("/api/finance", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "reset" }),
+        headers: { "Content-Type": "application/json", "x-user-id": userId },
+        body: JSON.stringify({ action: "reset", userId }),
       })
     } catch (e) {
       console.log("Background API sync error:", e)
