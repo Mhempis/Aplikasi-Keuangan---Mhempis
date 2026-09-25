@@ -1,6 +1,9 @@
 datasource db {
+  // CATATAN PRODUKSI: SQLite hanya untuk lokal/uji. Di serverless (Vercel) filesystem
+  // bersifat sementara, jadi ganti ke PostgreSQL: provider = "postgresql"
+  // + set DATABASE_URL ke connection string Postgres.
   provider = "sqlite"
-  url      = "file:./dev.db"
+  url      = env("DATABASE_URL")
 }
 
 generator client {
@@ -27,11 +30,13 @@ model Account {
   name      String
   balance   Float
   updatedAt DateTime @default(now()) @updatedAt
-  userId    String   @default("usr_default")
+  userId    String
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   transactions Transaction[]
   savingsGoals SavingsGoal[]
+
+  @@index([userId])
 }
 
 model Transaction {
@@ -44,8 +49,11 @@ model Transaction {
   status      String   @default("completed")
   accountId   String
   account     Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  userId      String   @default("usr_default")
+  userId      String
   user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, date])
+  @@index([accountId])
 }
 
 model SavingsGoal {
@@ -58,8 +66,10 @@ model SavingsGoal {
   color         String    @default("#3B82F6")
   accountId     String
   account       Account   @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  userId        String    @default("usr_default")
+  userId        String
   user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 model CategoryItem {
@@ -67,8 +77,9 @@ model CategoryItem {
   name   String
   type   String
   color  String @default("#3B82F6")
-  userId String @default("usr_default")
+  userId String
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, name, type])
+  @@index([userId])
 }

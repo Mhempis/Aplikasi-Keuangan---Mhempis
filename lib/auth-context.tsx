@@ -1,13 +1,14 @@
 "use client"
 
-import React, { createContext, useContext, useEffect, useState } from "react"
+import React, { createContext, useCallback, useContext, useState } from "react"
+import { useRouter } from "next/navigation"
 
 export interface AuthUser {
   id: string
   name: string
   email: string
   avatar?: string
-  provider: "google" | "credentials"
+  provider: string
 }
 
 interface AuthContextType {
@@ -15,101 +16,69 @@ interface AuthContextType {
   isAuthenticated: boolean
   isLoading: boolean
   loginWithEmail: (email: string, password: string) => Promise<{ success: boolean; error?: string }>
-  loginWithGoogle: (googleProfile?: { email: string; name?: string; picture?: string }) => Promise<void>
-  logout: () => void
+  loginWithGoogle: () => void
+  logout: () => Promise<void>
 }
-
-const STORAGE_KEY_AUTH = "pf_dashboard_auth_user_v1"
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
 
-export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<AuthUser | null>(null)
-  const [isLoading, setIsLoading] = useState(true)
+/**
+ * Auth context tipis di atas sesi server (cookie HttpOnly).
+ * TIDAK ada lagi: localStorage sebagai sumber kebenaran, fallback "login Google" palsu,
+ * atau data kredensial yang bisa diubah dari browser.
+ */
+export function AuthProvider({
+  initialUser,
+  children,
+}: {
+  initialUser: AuthUser | null
+  children: React.ReactNode
+}) {
+  const [user, setUser] = useState<AuthUser | null>(initialUser)
+  const [isLoading, setIsLoading] = useState(false)
+  const router = useRouter()
 
-  useEffect(() => {
-    try {
-      const savedUser = localStorage.getItem(STORAGE_KEY_AUTH)
-      if (savedUser) {
-        setUser(JSON.parse(savedUser))
-      }
-    } catch (e) {
-      console.error("Failed to load auth user:", e)
-    } finally {
-      setIsLoading(false)
-    }
-  }, [])
-
-  const saveUserSession = (authUser: AuthUser | null) => {
-    setUser(authUser)
-    if (authUser) {
-      localStorage.setItem(STORAGE_KEY_AUTH, JSON.stringify(authUser))
-    } else {
-      localStorage.removeItem(STORAGE_KEY_AUTH)
-    }
-  }
-
-  const loginWithEmail = async (email: string, password: string): Promise<{ success: boolean; error?: string }> => {
+  const loginWithEmail = useCallback(async (email: string, password: string) => {
+    setIsLoading(true)
     try {
       const res = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password }),
+        cache: "no-store",
       })
+      const data = (await res.json().catch(() => ({}))) as { user?: AuthUser; error?: string }
 
-      const data = await res.json()
-      if (!res.ok) {
-        return { success: false, error: data.error || "Email atau kata sandi salah!" }
+      if (!res.ok || !data.user) {
+        return { success: false, error: data.error || "Email atau kata sandi salah." }
       }
 
-      saveUserSession(data.user)
+      setUser(data.user)
+      router.replace("/")
+      router.refresh()
       return { success: true }
-    } catch (e) {
-      console.error("Email login error:", e)
+    } catch {
       return { success: false, error: "Gagal terhubung ke server autentikasi." }
+    } finally {
+      setIsLoading(false)
     }
-  }
+  }, [router])
 
-  const loginWithGoogle = async (googleProfile?: { email: string; name?: string; picture?: string }) => {
-    const profileToUse = googleProfile || {
-      email: "diddy.christ@gmail.com",
-      name: "Diddy Christ (Google SSO)",
-      picture: "https://api.dicebear.com/7.x/avataaars/svg?seed=Diddy",
-    }
+  const loginWithGoogle = useCallback(() => {
+    setIsLoading(true)
+    // Redirect penuh ke alur OAuth server (Authorization Code + state anti-CSRF).
+    window.location.href = "/api/auth/google"
+  }, [])
 
+  const logout = useCallback(async () => {
     try {
-      const res = await fetch("/api/auth/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "google", googleProfile: profileToUse }),
-      })
-
-      if (res.ok) {
-        const data = await res.json()
-        saveUserSession(data.user)
-      } else {
-        saveUserSession({
-          id: `usr_g_${Date.now()}`,
-          name: profileToUse.name || "User Google",
-          email: profileToUse.email,
-          avatar: profileToUse.picture,
-          provider: "google",
-        })
-      }
-    } catch (e) {
-      saveUserSession({
-        id: `usr_g_${Date.now()}`,
-        name: profileToUse.name || "User Google",
-        email: profileToUse.email,
-        avatar: profileToUse.picture,
-        provider: "google",
-      })
+      await fetch("/api/auth/logout", { method: "POST", cache: "no-store" })
+    } finally {
+      setUser(null)
+      router.replace("/login")
+      router.refresh()
     }
-  }
-
-  const logout = () => {
-    saveUserSession(null)
-  }
+  }, [router])
 
   return (
     <AuthContext.Provider

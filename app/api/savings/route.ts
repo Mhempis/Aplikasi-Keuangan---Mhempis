@@ -1,26 +1,45 @@
 import { NextResponse } from "next/server"
+import { randomUUID } from "node:crypto"
 import { prisma } from "@/lib/prisma"
+import { getSessionUser } from "@/lib/session"
+import { ownedAccount } from "@/lib/seed"
+import { cleanId, cleanText, isHexColor, isValidDate, parseAmount } from "@/lib/validation"
+
+const DEFAULT_GOAL_CATEGORY = "Lainnya"
+const DEFAULT_COLOR = "#3B82F6"
 
 export async function POST(req: Request) {
-  try {
-    const { name, targetAmount, category, color, accountId, targetDate, userId: bodyUserId } = await req.json()
-    const userId = req.headers.get("x-user-id") || bodyUserId || "usr_default"
+  const user = await getSessionUser()
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 
-    if (!name || !targetAmount || targetAmount <= 0 || !accountId) {
-      return NextResponse.json({ error: "Invalid savings goal data" }, { status: 400 })
+  try {
+    const body = (await req.json().catch(() => null)) as Record<string, unknown> | null
+    const name = cleanText(body?.name, 60)
+    const targetAmount = parseAmount(body?.targetAmount)
+    const accountId = cleanId(body?.accountId)
+    const category = cleanText(body?.category, 60) ?? DEFAULT_GOAL_CATEGORY
+    const color = isHexColor(body?.color) ? body.color : DEFAULT_COLOR
+    const targetDate = isValidDate(body?.targetDate) ? new Date(body.targetDate as string) : null
+
+    if (!name || targetAmount === null || !accountId) {
+      return NextResponse.json({ error: "Data target tabungan tidak valid." }, { status: 400 })
     }
+
+    // Rekening tujuan WAJIB milik user ini.
+    const account = await ownedAccount(user.id, accountId)
+    if (!account) return NextResponse.json({ error: "Rekening tidak ditemukan." }, { status: 404 })
 
     const goal = await prisma.savingsGoal.create({
       data: {
-        id: `s_${Date.now()}`,
+        id: `s_${randomUUID()}`,
         name,
-        targetAmount: parseFloat(targetAmount),
+        targetAmount,
         currentAmount: 0,
-        category: category || "Lainnya",
-        color: color || "#3B82F6",
+        category,
+        color,
         accountId,
-        userId,
-        targetDate: targetDate ? new Date(targetDate) : null,
+        userId: user.id,
+        targetDate,
       },
     })
 
@@ -29,77 +48,104 @@ export async function POST(req: Request) {
     })
   } catch (error) {
     console.error("POST /api/savings Error:", error)
-    return NextResponse.json({ error: "Failed to create savings goal" }, { status: 500 })
+    return NextResponse.json({ error: "Gagal membuat target tabungan." }, { status: 500 })
   }
 }
 
 export async function PUT(req: Request) {
-  try {
-    const { type, goalId, amount, fromGoalId, toGoalId, userId: bodyUserId } = await req.json()
-    const userId = req.headers.get("x-user-id") || bodyUserId || "usr_default"
+  const user = await getSessionUser()
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 
-    // 1. Deposit to savings
+  try {
+    const body = (await req.json().catch(() => null)) as Record<string, unknown> | null
+    const type = body?.type
+
+    // 1. Setoran ke tabungan
     if (type === "deposit") {
-      if (!goalId || !amount || amount <= 0) return NextResponse.json({ error: "Invalid deposit" }, { status: 400 })
-      const goal = await prisma.savingsGoal.findFirst({ where: { id: goalId, userId } })
-      if (!goal) return NextResponse.json({ error: "Goal not found" }, { status: 404 })
+      const goalId = cleanId(body?.goalId)
+      const amount = parseAmount(body?.amount)
+      if (!goalId || amount === null) {
+        return NextResponse.json({ error: "Parameter setoran tidak valid." }, { status: 400 })
+      }
+
+      const goal = await prisma.savingsGoal.findFirst({ where: { id: goalId, userId: user.id } })
+      if (!goal) return NextResponse.json({ error: "Target tabungan tidak ditemukan." }, { status: 404 })
+
+      const account = await ownedAccount(user.id, goal.accountId)
+      if (!account) return NextResponse.json({ error: "Rekening sumber tidak ditemukan." }, { status: 404 })
+
+      // Tanpa cek ini, setoran bisa membuat saldo rekening jadi negatif.
+      if (account.balance < amount) {
+        return NextResponse.json({ error: "Saldo rekening tidak cukup untuk setoran ini." }, { status: 400 })
+      }
 
       const now = new Date()
       await prisma.$transaction(async (tx) => {
         await tx.savingsGoal.update({
           where: { id: goalId },
-          data: { currentAmount: { increment: parseFloat(amount) } },
+          data: { currentAmount: { increment: amount } },
         })
 
         await tx.account.update({
           where: { id: goal.accountId },
-          data: { balance: { decrement: parseFloat(amount) }, updatedAt: now },
+          data: { balance: { decrement: amount }, updatedAt: now },
         })
 
         await tx.transaction.create({
           data: {
-            id: `t_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+            id: `t_${randomUUID()}`,
             description: `Setoran Tabungan: ${goal.name}`,
-            amount: parseFloat(amount),
+            amount,
             type: "expense",
             category: "Investasi & Dividen",
             accountId: goal.accountId,
-            userId,
+            userId: user.id,
             date: now,
             status: "completed",
           },
         })
       })
 
-      return NextResponse.json({ message: "Deposit successful" })
+      return NextResponse.json({ message: "Setoran tabungan berhasil." })
     }
 
-    // 2. Transfer between savings
+    // 2. Pindah dana antar target tabungan
     if (type === "transfer") {
-      if (!fromGoalId || !toGoalId || !amount || amount <= 0) return NextResponse.json({ error: "Invalid transfer" }, { status: 400 })
-      const fromGoal = await prisma.savingsGoal.findFirst({ where: { id: fromGoalId, userId } })
-      const toGoal = await prisma.savingsGoal.findFirst({ where: { id: toGoalId, userId } })
-      if (!fromGoal || !toGoal || fromGoal.currentAmount < parseFloat(amount)) {
-        return NextResponse.json({ error: "Insufficient funds in source goal" }, { status: 400 })
+      const fromGoalId = cleanId(body?.fromGoalId)
+      const toGoalId = cleanId(body?.toGoalId)
+      const amount = parseAmount(body?.amount)
+
+      if (!fromGoalId || !toGoalId || amount === null || fromGoalId === toGoalId) {
+        return NextResponse.json({ error: "Parameter transfer tidak valid." }, { status: 400 })
       }
 
-      await prisma.$transaction(async (tx) => {
-        await tx.savingsGoal.update({
-          where: { id: fromGoalId },
-          data: { currentAmount: { decrement: parseFloat(amount) } },
-        })
-        await tx.savingsGoal.update({
-          where: { id: toGoalId },
-          data: { currentAmount: { increment: parseFloat(amount) } },
-        })
-      })
+      const fromGoal = await prisma.savingsGoal.findFirst({ where: { id: fromGoalId, userId: user.id } })
+      const toGoal = await prisma.savingsGoal.findFirst({ where: { id: toGoalId, userId: user.id } })
 
-      return NextResponse.json({ message: "Savings transfer successful" })
+      if (!fromGoal || !toGoal) {
+        return NextResponse.json({ error: "Target tabungan tidak ditemukan." }, { status: 404 })
+      }
+      if (fromGoal.currentAmount < amount) {
+        return NextResponse.json({ error: "Dana pada target sumber tidak cukup." }, { status: 400 })
+      }
+
+      await prisma.$transaction([
+        prisma.savingsGoal.update({
+          where: { id: fromGoalId },
+          data: { currentAmount: { decrement: amount } },
+        }),
+        prisma.savingsGoal.update({
+          where: { id: toGoalId },
+          data: { currentAmount: { increment: amount } },
+        }),
+      ])
+
+      return NextResponse.json({ message: "Transfer antar tabungan berhasil." })
     }
 
-    return NextResponse.json({ error: "Invalid type" }, { status: 400 })
+    return NextResponse.json({ error: "Jenis operasi tabungan tidak dikenal." }, { status: 400 })
   } catch (error) {
     console.error("PUT /api/savings Error:", error)
-    return NextResponse.json({ error: "Failed to update savings" }, { status: 500 })
+    return NextResponse.json({ error: "Gagal memperbarui tabungan." }, { status: 500 })
   }
 }

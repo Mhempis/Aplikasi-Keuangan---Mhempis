@@ -27,7 +27,7 @@ export function TransferModal({ isOpen, onClose, defaultTab = "savings" }: Trans
 
   if (!isOpen) return null
 
-  const handleSavingsTransfer = (e: React.FormEvent) => {
+  const handleSavingsTransfer = async (e: React.FormEvent) => {
     e.preventDefault()
     const amt = parseFloat(savingsAmount.replace(/[^0-9]/g, ""))
     if (isNaN(amt) || amt <= 0) {
@@ -45,7 +45,7 @@ export function TransferModal({ isOpen, onClose, defaultTab = "savings" }: Trans
       return
     }
 
-    const success = transferBetweenSavings(fromGoalId, toGoalId, amt)
+    const success = await transferBetweenSavings(fromGoalId, toGoalId, amt)
     if (success) {
       setSavingsAmount("")
       onClose()
@@ -54,7 +54,7 @@ export function TransferModal({ isOpen, onClose, defaultTab = "savings" }: Trans
     }
   }
 
-  const handleAccountTransfer = (e: React.FormEvent) => {
+  const handleAccountTransfer = async (e: React.FormEvent) => {
     e.preventDefault()
     const amt = parseFloat(accountAmount.replace(/[^0-9]/g, ""))
     if (isNaN(amt) || amt <= 0) {
@@ -72,7 +72,7 @@ export function TransferModal({ isOpen, onClose, defaultTab = "savings" }: Trans
       return
     }
 
-    const success = transferBetweenAccounts(fromAccountId, toAccountId, amt)
+    const success = await transferBetweenAccounts(fromAccountId, toAccountId, amt)
     if (success) {
       setAccountAmount("")
       onClose()

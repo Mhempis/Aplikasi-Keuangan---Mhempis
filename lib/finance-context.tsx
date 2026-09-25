@@ -1,6 +1,6 @@
 "use client"
 
-import React, { createContext, useContext, useEffect, useState, useMemo, useCallback } from "react"
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react"
 import { useAuth } from "./auth-context"
 import {
   type Account,
@@ -10,10 +10,6 @@ import {
   type SpendingCategory,
   type CategoryItem,
   type TransactionType,
-  initialAccounts,
-  initialTransactions,
-  initialSavingsGoals,
-  initialCategories,
   CATEGORY_COLORS,
 } from "./finance-data"
 
@@ -27,380 +23,335 @@ interface FinanceContextType {
   totalIncome: number
   totalExpense: number
   totalSavings: number
-  addTransaction: (tx: Omit<Transaction, "id" | "date" | "status">) => Promise<void>
-  deleteTransaction: (id: string) => Promise<void>
-  addSavingsGoal: (goal: Omit<SavingsGoal, "id" | "currentAmount">) => Promise<void>
-  depositToSavings: (goalId: string, amount: number) => Promise<void>
+  addTransaction: (tx: Omit<Transaction, "id" | "date" | "status">) => Promise<boolean>
+  deleteTransaction: (id: string) => Promise<boolean>
+  addSavingsGoal: (goal: Omit<SavingsGoal, "id" | "currentAmount">) => Promise<boolean>
+  depositToSavings: (goalId: string, amount: number) => Promise<boolean>
   transferBetweenSavings: (fromGoalId: string, toGoalId: string, amount: number) => Promise<boolean>
   transferBetweenAccounts: (fromAccountId: AccountId, toAccountId: AccountId, amount: number) => Promise<boolean>
-  addAccount: (name: string, initialBalance: number) => Promise<void>
-  editAccount: (id: AccountId, name: string, balance: number) => Promise<void>
-  deleteAccount: (id: AccountId) => Promise<void>
-  addCategory: (name: string, type: TransactionType, color?: string) => Promise<void>
-  deleteCategory: (name: string, type: TransactionType) => Promise<void>
-  resetToDefaultData: () => Promise<void>
+  addAccount: (name: string, initialBalance: number) => Promise<boolean>
+  editAccount: (id: AccountId, name: string, balance: number) => Promise<boolean>
+  deleteAccount: (id: AccountId) => Promise<boolean>
+  addCategory: (name: string, type: TransactionType, color?: string) => Promise<boolean>
+  deleteCategory: (name: string, type: TransactionType) => Promise<boolean>
+  resetToDefaultData: () => Promise<boolean>
   refreshData: () => Promise<void>
 }
 
+interface Snapshot {
+  accounts: Account[]
+  transactions: Transaction[]
+  savingsGoals: SavingsGoal[]
+  categories: CategoryItem[]
+}
+
+const EMPTY: Snapshot = { accounts: [], transactions: [], savingsGoals: [], categories: [] }
+
 const FinanceContext = createContext<FinanceContextType | undefined>(undefined)
 
+/**
+ * Sumber kebenaran data keuangan = DATABASE (lewat API ber-sesi).
+ * localStorage TIDAK lagi dipakai sebagai penyimpanan utama, jadi:
+ *  - data tidak bisa dipalsukan dari browser,
+ *  - data tidak hilang saat ganti perangkat/clear browser,
+ *  - tiap user hanya melihat datanya sendiri (userId dari sesi server).
+ *
+ * Pola update: optimistik dulu (UI responsif) -> kirim ke server ->
+ * kalau server menolak, state dikembalikan (rollback) + pesan error.
+ */
 export function FinanceProvider({ children }: { children: React.ReactNode }) {
   const { user } = useAuth()
-  const userId = user?.id || "usr_default"
+  const userId = user?.id ?? null
 
-  const storageKeyAccounts = `pf_dashboard_accounts_${userId}`
-  const storageKeyTransactions = `pf_dashboard_transactions_${userId}`
-  const storageKeySavings = `pf_dashboard_savings_${userId}`
-  const storageKeyCategories = `pf_dashboard_categories_${userId}`
+  const [data, setData] = useState<Snapshot>(EMPTY)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const dataRef = useRef<Snapshot>(EMPTY)
 
-  const [accounts, setAccounts] = useState<Account[]>(initialAccounts)
-  const [transactions, setTransactions] = useState<Transaction[]>(initialTransactions)
-  const [savingsGoals, setSavingsGoals] = useState<SavingsGoal[]>(initialSavingsGoals)
-  const [categories, setCategories] = useState<CategoryItem[]>(initialCategories)
-  const [isLoaded, setIsLoaded] = useState(false)
-
-  // 1. Initial load from isolated LocalStorage per userId
   useEffect(() => {
+    dataRef.current = data
+  }, [data])
+
+  const refreshData = useCallback(async () => {
+    if (!userId) return
     try {
-      const savedAccounts = localStorage.getItem(storageKeyAccounts)
-      const savedTx = localStorage.getItem(storageKeyTransactions)
-      const savedSavings = localStorage.getItem(storageKeySavings)
-      const savedCategories = localStorage.getItem(storageKeyCategories)
-
-      if (savedAccounts) setAccounts(JSON.parse(savedAccounts))
-      else setAccounts(initialAccounts)
-
-      if (savedTx) setTransactions(JSON.parse(savedTx))
-      else setTransactions(initialTransactions)
-
-      if (savedSavings) setSavingsGoals(JSON.parse(savedSavings))
-      else setSavingsGoals(initialSavingsGoals)
-
-      if (savedCategories) setCategories(JSON.parse(savedCategories))
-      else setCategories(initialCategories)
-    } catch (e) {
-      console.error("Failed to load local finance data:", e)
-    } finally {
-      setIsLoaded(true)
-    }
-  }, [userId, storageKeyAccounts, storageKeyTransactions, storageKeySavings, storageKeyCategories])
-
-  // 2. Sync to isolated LocalStorage per userId on state update
-  useEffect(() => {
-    if (!isLoaded) return
-    try {
-      localStorage.setItem(storageKeyAccounts, JSON.stringify(accounts))
-      localStorage.setItem(storageKeyTransactions, JSON.stringify(transactions))
-      localStorage.setItem(storageKeySavings, JSON.stringify(savingsGoals))
-      localStorage.setItem(storageKeyCategories, JSON.stringify(categories))
-    } catch (e) {
-      console.error("Failed to save local finance data:", e)
-    }
-  }, [accounts, transactions, savingsGoals, categories, isLoaded, storageKeyAccounts, storageKeyTransactions, storageKeySavings, storageKeyCategories])
-
-  // 3. Sync from isolated SQLite API per userId
-  const fetchFinanceData = useCallback(async () => {
-    try {
-      const res = await fetch(`/api/finance?userId=${userId}`, {
-        headers: { "x-user-id": userId },
-      })
-      if (res.ok) {
-        const data = await res.json()
-        if (data.accounts && data.accounts.length > 0) setAccounts(data.accounts)
-        if (data.transactions && data.transactions.length > 0) setTransactions(data.transactions)
-        if (data.savingsGoals && data.savingsGoals.length > 0) setSavingsGoals(data.savingsGoals)
-        if (data.categories && data.categories.length > 0) setCategories(data.categories)
+      const res = await fetch("/api/finance", { cache: "no-store" })
+      if (res.status === 401) {
+        window.location.href = "/login"
+        return
       }
-    } catch (e) {
-      console.log("SQLite API fallback to user local state")
+      if (!res.ok) {
+        setErrorMessage("Gagal memuat data keuangan dari server.")
+        return
+      }
+      const payload = (await res.json()) as Partial<Snapshot>
+      setData({
+        accounts: payload.accounts ?? [],
+        transactions: payload.transactions ?? [],
+        savingsGoals: payload.savingsGoals ?? [],
+        categories: payload.categories ?? [],
+      })
+      setErrorMessage(null)
+    } catch {
+      setErrorMessage("Tidak bisa menghubungi server. Perubahan tidak akan tersimpan.")
     }
   }, [userId])
 
   useEffect(() => {
-    fetchFinanceData()
-  }, [fetchFinanceData])
+    void refreshData()
+  }, [refreshData])
 
-  // Isolated Actions with x-user-id header
-  const addTransaction = async (newTxData: Omit<Transaction, "id" | "date" | "status">) => {
-    const now = new Date().toISOString()
-    const newTx: Transaction = {
-      ...newTxData,
-      id: `t_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-      date: now,
-      status: "completed",
+  const apiCall = useCallback(async (url: string, init: RequestInit) => {
+    const res = await fetch(url, { ...init, cache: "no-store" })
+    const payload = (await res.json().catch(() => ({}))) as { error?: string }
+
+    if (res.status === 401) {
+      window.location.href = "/login"
+      throw new Error("Sesi berakhir. Silakan masuk kembali.")
     }
-
-    setTransactions((prev) => [newTx, ...prev])
-    setAccounts((prev) =>
-      prev.map((acc) => {
-        if (acc.id === newTxData.accountId) {
-          const delta = newTxData.type === "income" ? newTxData.amount : -newTxData.amount
-          return { ...acc, balance: Math.max(0, acc.balance + delta), updatedAt: now }
-        }
-        return acc
-      })
-    )
-
-    try {
-      await fetch("/api/transactions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-user-id": userId },
-        body: JSON.stringify({ ...newTxData, userId }),
-      })
-    } catch (e) {
-      console.log("Background API sync error:", e)
+    if (!res.ok) {
+      throw new Error(payload.error || "Permintaan gagal diproses server.")
     }
-  }
+    return payload
+  }, [])
 
-  const deleteTransaction = async (id: string) => {
-    const tx = transactions.find((t) => t.id === id)
-    if (!tx) return
+  const runMutation = useCallback(
+    async (updater: (current: Snapshot) => Snapshot, request: () => Promise<unknown>): Promise<boolean> => {
+      const previous = dataRef.current
+      setData(updater(previous))
 
-    setTransactions((prev) => prev.filter((t) => t.id !== id))
-    setAccounts((prev) =>
-      prev.map((acc) => {
-        if (acc.id === tx.accountId) {
-          const delta = tx.type === "income" ? -tx.amount : tx.amount
-          return { ...acc, balance: Math.max(0, acc.balance + delta), updatedAt: new Date().toISOString() }
-        }
-        return acc
-      })
-    )
+      try {
+        await request()
+        await refreshData()
+        return true
+      } catch (error) {
+        setData(previous) // rollback supaya UI tidak "sukses palsu"
+        setErrorMessage(error instanceof Error ? error.message : "Terjadi kesalahan.")
+        return false
+      }
+    },
+    [refreshData]
+  )
 
-    try {
-      await fetch(`/api/transactions?id=${id}`, {
-        method: "DELETE",
-        headers: { "x-user-id": userId },
-      })
-    } catch (e) {
-      console.log("Background API sync error:", e)
-    }
-  }
-
-  const addSavingsGoal = async (newGoal: Omit<SavingsGoal, "id" | "currentAmount">) => {
-    const goal: SavingsGoal = {
-      ...newGoal,
-      id: `s_${Date.now()}`,
-      currentAmount: 0,
-    }
-    setSavingsGoals((prev) => [...prev, goal])
-
-    try {
-      await fetch("/api/savings", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-user-id": userId },
-        body: JSON.stringify({ ...newGoal, userId }),
-      })
-    } catch (e) {
-      console.log("Background API sync error:", e)
-    }
-  }
-
-  const depositToSavings = async (goalId: string, amount: number) => {
-    const goal = savingsGoals.find((g) => g.id === goalId)
-    if (!goal || amount <= 0) return
-
-    setSavingsGoals((prev) =>
-      prev.map((g) => (g.id === goalId ? { ...g, currentAmount: g.currentAmount + amount } : g))
-    )
-
-    await addTransaction({
-      description: `Setoran Tabungan: ${goal.name}`,
-      category: "Investasi & Dividen",
-      amount,
-      type: "expense",
-      accountId: goal.accountId,
+  const jsonPost = (url: string, body: unknown, method = "POST"): Promise<unknown> =>
+    apiCall(url, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
     })
 
-    try {
-      await fetch("/api/savings", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json", "x-user-id": userId },
-        body: JSON.stringify({ type: "deposit", goalId, amount, userId }),
-      })
-    } catch (e) {
-      console.log("Background API sync error:", e)
-    }
+  /* ------------------------- mutasi ------------------------- */
+
+  const addTransaction = (newTxData: Omit<Transaction, "id" | "date" | "status">) => {
+    const nowIso = new Date().toISOString()
+    return runMutation(
+      (current) => ({
+        ...current,
+        transactions: [
+          { ...newTxData, id: `tmp_${Date.now()}`, date: nowIso, status: "completed" as const },
+          ...current.transactions,
+        ],
+        accounts: current.accounts.map((acc) =>
+          acc.id === newTxData.accountId
+            ? {
+                ...acc,
+                balance:
+                  acc.balance + (newTxData.type === "income" ? newTxData.amount : -newTxData.amount),
+                updatedAt: nowIso,
+              }
+            : acc
+        ),
+      }),
+      () => jsonPost("/api/transactions", newTxData)
+    )
   }
 
-  const transferBetweenSavings = async (fromGoalId: string, toGoalId: string, amount: number): Promise<boolean> => {
-    if (fromGoalId === toGoalId || amount <= 0) return false
-    const fromGoal = savingsGoals.find((g) => g.id === fromGoalId)
-    const toGoal = savingsGoals.find((g) => g.id === toGoalId)
-
-    if (!fromGoal || !toGoal) return false
-    if (fromGoal.currentAmount < amount) return false
-
-    setSavingsGoals((prev) =>
-      prev.map((g) => {
-        if (g.id === fromGoalId) return { ...g, currentAmount: g.currentAmount - amount }
-        if (g.id === toGoalId) return { ...g, currentAmount: g.currentAmount + amount }
-        return g
-      })
+  const deleteTransaction = (id: string) =>
+    runMutation(
+      (current) => {
+        const tx = current.transactions.find((t) => t.id === id)
+        if (!tx) return current
+        return {
+          ...current,
+          transactions: current.transactions.filter((t) => t.id !== id),
+          accounts: current.accounts.map((acc) =>
+            acc.id === tx.accountId
+              ? {
+                  ...acc,
+                  balance: acc.balance + (tx.type === "income" ? -tx.amount : tx.amount),
+                  updatedAt: new Date().toISOString(),
+                }
+              : acc
+          ),
+        }
+      },
+      () => apiCall(`/api/transactions?id=${encodeURIComponent(id)}`, { method: "DELETE" })
     )
 
-    try {
-      await fetch("/api/savings", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json", "x-user-id": userId },
-        body: JSON.stringify({ type: "transfer", fromGoalId, toGoalId, amount, userId }),
-      })
-    } catch (e) {
-      console.log("Background API sync error:", e)
-    }
-
-    return true
-  }
-
-  const transferBetweenAccounts = async (fromAccountId: AccountId, toAccountId: AccountId, amount: number): Promise<boolean> => {
-    if (fromAccountId === toAccountId || amount <= 0) return false
-    const fromAcc = accounts.find((a) => a.id === fromAccountId)
-    const toAcc = accounts.find((a) => a.id === toAccountId)
-
-    if (!fromAcc || !toAcc) return false
-    if (fromAcc.balance < amount) return false
-
-    const now = new Date().toISOString()
-    setAccounts((prev) =>
-      prev.map((acc) => {
-        if (acc.id === fromAccountId) return { ...acc, balance: acc.balance - amount, updatedAt: now }
-        if (acc.id === toAccountId) return { ...acc, balance: acc.balance + amount, updatedAt: now }
-        return acc
-      })
+  const addSavingsGoal = (newGoal: Omit<SavingsGoal, "id" | "currentAmount">) =>
+    runMutation(
+      (current) => ({
+        ...current,
+        savingsGoals: [
+          ...current.savingsGoals,
+          { ...newGoal, id: `tmp_${Date.now()}`, currentAmount: 0 },
+        ],
+      }),
+      () => jsonPost("/api/savings", newGoal)
     )
 
-    try {
-      await fetch("/api/accounts", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json", "x-user-id": userId },
-        body: JSON.stringify({ fromAccountId, toAccountId, amount, userId }),
-      })
-    } catch (e) {
-      console.log("Background API sync error:", e)
-    }
-
-    return true
+  const depositToSavings = (goalId: string, amount: number) => {
+    if (amount <= 0) return Promise.resolve(false)
+    return runMutation(
+      (current) => ({
+        ...current,
+        savingsGoals: current.savingsGoals.map((g) =>
+          g.id === goalId ? { ...g, currentAmount: g.currentAmount + amount } : g
+        ),
+      }),
+      () => jsonPost("/api/savings", { type: "deposit", goalId, amount }, "PUT")
+    )
   }
 
-  const addAccount = async (name: string, initialBalance: number) => {
-    const id = `acc_${Date.now()}_${userId}`
-    const newAcc: Account = {
-      id,
-      name,
-      balance: Math.max(0, initialBalance),
-      updatedAt: new Date().toISOString(),
-    }
-    setAccounts((prev) => [...prev, newAcc])
+  const transferBetweenSavings = (fromGoalId: string, toGoalId: string, amount: number) => {
+    if (fromGoalId === toGoalId || amount <= 0) return Promise.resolve(false)
 
-    try {
-      await fetch("/api/accounts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-user-id": userId },
-        body: JSON.stringify({ name, balance: initialBalance, userId }),
-      })
-    } catch (e) {
-      console.log("Background API sync error:", e)
+    const fromGoal = dataRef.current.savingsGoals.find((g) => g.id === fromGoalId)
+    if (!fromGoal || fromGoal.currentAmount < amount) {
+      setErrorMessage("Dana pada target tabungan sumber tidak cukup.")
+      return Promise.resolve(false)
     }
+
+    return runMutation(
+      (current) => ({
+        ...current,
+        savingsGoals: current.savingsGoals.map((g) => {
+          if (g.id === fromGoalId) return { ...g, currentAmount: g.currentAmount - amount }
+          if (g.id === toGoalId) return { ...g, currentAmount: g.currentAmount + amount }
+          return g
+        }),
+      }),
+      () => jsonPost("/api/savings", { type: "transfer", fromGoalId, toGoalId, amount }, "PUT")
+    )
   }
 
-  const editAccount = async (id: AccountId, name: string, balance: number) => {
-    setAccounts((prev) =>
-      prev.map((acc) => (acc.id === id ? { ...acc, name, balance: Math.max(0, balance), updatedAt: new Date().toISOString() } : acc))
+  const transferBetweenAccounts = (fromAccountId: AccountId, toAccountId: AccountId, amount: number) => {
+    if (fromAccountId === toAccountId || amount <= 0) return Promise.resolve(false)
+
+    const fromAcc = dataRef.current.accounts.find((a) => a.id === fromAccountId)
+    if (!fromAcc || fromAcc.balance < amount) {
+      setErrorMessage("Saldo rekening sumber tidak cukup.")
+      return Promise.resolve(false)
+    }
+
+    const nowIso = new Date().toISOString()
+    return runMutation(
+      (current) => ({
+        ...current,
+        accounts: current.accounts.map((acc) => {
+          if (acc.id === fromAccountId) return { ...acc, balance: acc.balance - amount, updatedAt: nowIso }
+          if (acc.id === toAccountId) return { ...acc, balance: acc.balance + amount, updatedAt: nowIso }
+          return acc
+        }),
+      }),
+      () => jsonPost("/api/accounts", { fromAccountId, toAccountId, amount }, "PATCH")
+    )
+  }
+
+  const addAccount = (name: string, initialBalance: number) =>
+    runMutation(
+      (current) => ({
+        ...current,
+        accounts: [
+          ...current.accounts,
+          {
+            id: `tmp_${Date.now()}`,
+            name,
+            balance: initialBalance,
+            updatedAt: new Date().toISOString(),
+          },
+        ],
+      }),
+      () => jsonPost("/api/accounts", { name, balance: initialBalance })
     )
 
-    try {
-      await fetch("/api/accounts", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json", "x-user-id": userId },
-        body: JSON.stringify({ id, name, balance, userId }),
-      })
-    } catch (e) {
-      console.log("Background API sync error:", e)
+  const editAccount = (id: AccountId, name: string, balance: number) =>
+    runMutation(
+      (current) => ({
+        ...current,
+        accounts: current.accounts.map((acc) =>
+          acc.id === id ? { ...acc, name, balance, updatedAt: new Date().toISOString() } : acc
+        ),
+      }),
+      () => jsonPost("/api/accounts", { id, name, balance }, "PUT")
+    )
+
+  const deleteAccount = (id: AccountId) => {
+    if (dataRef.current.accounts.length <= 1) {
+      setErrorMessage("Tidak bisa menghapus semua rekening. Minimal harus ada 1 rekening aktif.")
+      return Promise.resolve(false)
     }
+    return runMutation(
+      (current) => ({ ...current, accounts: current.accounts.filter((acc) => acc.id !== id) }),
+      () => apiCall(`/api/accounts?id=${encodeURIComponent(id)}`, { method: "DELETE" })
+    )
   }
 
-  const deleteAccount = async (id: AccountId) => {
-    if (accounts.length <= 1) {
-      alert("Tidak bisa menghapus semua rekening! Minimal harus ada 1 rekening aktif.")
-      return
-    }
-    setAccounts((prev) => prev.filter((acc) => acc.id !== id))
-
-    try {
-      await fetch(`/api/accounts?id=${id}`, {
-        method: "DELETE",
-        headers: { "x-user-id": userId },
-      })
-    } catch (e) {
-      console.log("Background API sync error:", e)
-    }
-  }
-
-  const addCategory = async (name: string, type: TransactionType, color: string = "#3B82F6") => {
-    const exists = categories.some((c) => c.name.toLowerCase() === name.toLowerCase() && c.type === type)
+  const addCategory = (name: string, type: TransactionType, color = "#3B82F6") => {
+    const exists = dataRef.current.categories.some(
+      (c) => c.name.toLowerCase() === name.toLowerCase() && c.type === type
+    )
     if (exists) {
-      alert("Kategori dengan nama ini sudah ada!")
-      return
+      setErrorMessage("Kategori dengan nama ini sudah ada.")
+      return Promise.resolve(false)
     }
-    setCategories((prev) => [...prev, { name, type, color }])
 
-    try {
-      await fetch("/api/categories", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-user-id": userId },
-        body: JSON.stringify({ name, type, color, userId }),
-      })
-    } catch (e) {
-      console.log("Background API sync error:", e)
-    }
+    return runMutation(
+      (current) => ({ ...current, categories: [...current.categories, { name, type, color }] }),
+      () => jsonPost("/api/categories", { name, type, color })
+    )
   }
 
-  const deleteCategory = async (name: string, type: TransactionType) => {
-    setCategories((prev) => prev.filter((c) => !(c.name === name && c.type === type)))
+  const deleteCategory = (name: string, type: TransactionType) =>
+    runMutation(
+      (current) => ({
+        ...current,
+        categories: current.categories.filter((c) => !(c.name === name && c.type === type)),
+      }),
+      () =>
+        apiCall(`/api/categories?name=${encodeURIComponent(name)}&type=${encodeURIComponent(type)}`, {
+          method: "DELETE",
+        })
+    )
 
-    try {
-      await fetch(`/api/categories?name=${encodeURIComponent(name)}&type=${type}`, {
-        method: "DELETE",
-        headers: { "x-user-id": userId },
-      })
-    } catch (e) {
-      console.log("Background API sync error:", e)
-    }
-  }
+  const resetToDefaultData = () =>
+    runMutation((current) => current, () => jsonPost("/api/finance", { action: "reset" }))
 
-  const resetToDefaultData = async () => {
-    setAccounts(initialAccounts)
-    setTransactions(initialTransactions)
-    setSavingsGoals(initialSavingsGoals)
-    setCategories(initialCategories)
-    try {
-      localStorage.removeItem(storageKeyAccounts)
-      localStorage.removeItem(storageKeyTransactions)
-      localStorage.removeItem(storageKeySavings)
-      localStorage.removeItem(storageKeyCategories)
-      await fetch("/api/finance", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-user-id": userId },
-        body: JSON.stringify({ action: "reset", userId }),
-      })
-    } catch (e) {
-      console.log("Background API sync error:", e)
-    }
-  }
+  /* ------------------------- turunan ------------------------- */
+
+  const { accounts, transactions, savingsGoals, categories } = data
 
   const totalBalance = useMemo(() => accounts.reduce((sum, a) => sum + a.balance, 0), [accounts])
 
   const totalIncome = useMemo(
-    () => transactions.filter((t) => t.type === "income" && t.status === "completed").reduce((sum, t) => sum + t.amount, 0),
+    () =>
+      transactions
+        .filter((t) => t.type === "income" && t.status === "completed")
+        .reduce((sum, t) => sum + t.amount, 0),
     [transactions]
   )
 
   const totalExpense = useMemo(
-    () => transactions.filter((t) => t.type === "expense" && t.status === "completed").reduce((sum, t) => sum + t.amount, 0),
+    () =>
+      transactions
+        .filter((t) => t.type === "expense" && t.status === "completed")
+        .reduce((sum, t) => sum + t.amount, 0),
     [transactions]
   )
 
-  const totalSavings = useMemo(() => savingsGoals.reduce((sum, g) => sum + g.currentAmount, 0), [savingsGoals])
+  const totalSavings = useMemo(
+    () => savingsGoals.reduce((sum, g) => sum + g.currentAmount, 0),
+    [savingsGoals]
+  )
 
   const spendingByCategory = useMemo(() => {
     const categoryTotals: Record<string, number> = {}
@@ -444,9 +395,14 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
         addCategory,
         deleteCategory,
         resetToDefaultData,
-        refreshData: fetchFinanceData,
+        refreshData,
       }}
     >
+      {errorMessage && (
+        <div className="fixed inset-x-0 top-0 z-50 bg-[#EF4444] px-4 py-2 text-center text-xs font-semibold text-white shadow-lg">
+          {errorMessage}
+        </div>
+      )}
       {children}
     </FinanceContext.Provider>
   )

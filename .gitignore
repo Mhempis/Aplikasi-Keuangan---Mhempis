@@ -25,3 +25,6 @@ __v0_jsx-dev-runtime.ts
 .snowflake/
 .v0-trash/
 .vercel/
+
+# TypeScript incremental build info
+*.tsbuildinfo
