@@ -41,10 +41,18 @@ export function rateLimit(key: string, limit: number, windowMs: number): RateLim
   return { ok: true, remaining: limit - bucket.count, retryAfterSeconds: 0 }
 }
 
-/** Ambil IP client dari header proxy (Vercel mengirim x-forwarded-for). */
+/**
+ * Ambil IP client dari header proxy.
+ * CATATAN: dipakai nilai PALING KANAN dari x-forwarded-for, karena itu IP yang
+ * ditambahkan oleh reverse proxy kita sendiri (nginx). Kalau dipakai nilai paling
+ * kiri, client bisa mengirim header X-Forwarded-For palsu untuk mengakali limiter.
+ */
 export function clientIp(req: Request): string {
   const headers = req.headers
   const forwarded = headers.get("x-forwarded-for")
-  if (forwarded) return forwarded.split(",")[0]!.trim()
+  if (forwarded) {
+    const parts = forwarded.split(",").map((p) => p.trim()).filter(Boolean)
+    if (parts.length > 0) return parts[parts.length - 1]!
+  }
   return headers.get("x-real-ip") || headers.get("cf-connecting-ip") || "unknown"
 }

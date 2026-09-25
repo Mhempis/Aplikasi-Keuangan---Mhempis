@@ -1,8 +1,8 @@
 datasource db {
-  // CATATAN PRODUKSI: SQLite hanya untuk lokal/uji. Di serverless (Vercel) filesystem
-  // bersifat sementara, jadi ganti ke PostgreSQL: provider = "postgresql"
-  // + set DATABASE_URL ke connection string Postgres.
-  provider = "sqlite"
+  // Produksi & development pakai PostgreSQL (SQLite tidak dipakai lagi karena
+  // app ini di-host di server sendiri, bukan serverless).
+  // DATABASE_URL contoh: postgresql://user:pass@host:5432/keuangan?schema=public
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
