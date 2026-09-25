@@ -18,8 +18,15 @@ export function TransactionModal({ isOpen, onClose, defaultType = "expense" }: T
   const [amount, setAmount] = useState("")
 
   const filteredCategories = categories.filter((c) => c.type === type)
-  const [category, setCategory] = useState<string>(filteredCategories[0]?.name || "Groceries")
-  const [accountId, setAccountId] = useState<AccountId>(accounts[0]?.id || "bca")
+  const [category, setCategory] = useState<string>("")
+  const [accountId, setAccountId] = useState<string>("")
+
+  // Nilai efektif dihitung saat render agar selalu sinkron dengan rekening/kategori yang
+  // benar-benar ada di database. (Sebelumnya default-nya string keras "bca"/"mandiri",
+  // sehingga penyimpanan selalu ditolak server saat rekening asli punya ID berbeda.)
+  const effectiveCategory =
+    category || filteredCategories[0]?.name || (type === "expense" ? "Groceries" : "Gaji")
+  const effectiveAccountId = accountId || accounts[0]?.id || ""
 
   if (!isOpen) return null
 
@@ -30,13 +37,17 @@ export function TransactionModal({ isOpen, onClose, defaultType = "expense" }: T
       alert("Harap isi deskripsi dan nominal yang valid!")
       return
     }
+    if (!effectiveAccountId) {
+      alert("Belum ada rekening aktif. Tambahkan rekening dulu di menu Master Data.")
+      return
+    }
 
     addTransaction({
       description,
       amount: numericAmount,
       type,
-      category: category || (type === "expense" ? "Groceries" : "Gaji"),
-      accountId: accountId || accounts[0]?.id || "bca",
+      category: effectiveCategory,
+      accountId: effectiveAccountId,
     })
 
     // Reset & close
@@ -135,7 +146,7 @@ export function TransactionModal({ isOpen, onClose, defaultType = "expense" }: T
               Kategori
             </label>
             <select
-              value={category}
+              value={effectiveCategory}
               onChange={(e) => setCategory(e.target.value)}
               className="w-full rounded-xl border border-white/10 bg-[#111827] px-4 py-2.5 text-sm text-white focus:border-[#3B82F6] focus:outline-none"
             >
@@ -153,8 +164,8 @@ export function TransactionModal({ isOpen, onClose, defaultType = "expense" }: T
               Akun / Pembayaran
             </label>
             <select
-              value={accountId}
-              onChange={(e) => setAccountId(e.target.value as AccountId)}
+              value={effectiveAccountId}
+              onChange={(e) => setAccountId(e.target.value)}
               className="w-full rounded-xl border border-white/10 bg-[#111827] px-4 py-2.5 text-sm text-white focus:border-[#3B82F6] focus:outline-none"
             >
               {accounts.map((acc) => (

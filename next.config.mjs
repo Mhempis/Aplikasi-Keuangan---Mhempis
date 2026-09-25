@@ -30,9 +30,6 @@ const nextConfig = {
   typescript: {
     ignoreBuildErrors: false,
   },
-  eslint: {
-    ignoreDuringBuilds: false,
-  },
   poweredByHeader: false,
   images: {
     unoptimized: true,

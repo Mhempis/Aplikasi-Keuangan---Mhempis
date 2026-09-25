@@ -16,13 +16,22 @@ export function TransferModal({ isOpen, onClose, defaultTab = "savings" }: Trans
   const [tab, setTab] = useState<"savings" | "accounts">(defaultTab)
 
   // Savings Transfer State
-  const [fromGoalId, setFromGoalId] = useState<string>(savingsGoals[0]?.id || "")
-  const [toGoalId, setToGoalId] = useState<string>(savingsGoals[1]?.id || "")
+  const [fromGoalId, setFromGoalId] = useState<string>("")
+  const [toGoalId, setToGoalId] = useState<string>("")
   const [savingsAmount, setSavingsAmount] = useState<string>("")
 
   // Account Transfer State
-  const [fromAccountId, setFromAccountId] = useState<AccountId>(accounts[0]?.id || "bca")
-  const [toAccountId, setToAccountId] = useState<AccountId>(accounts[1]?.id || "mandiri")
+  const [fromAccountId, setFromAccountId] = useState<string>("")
+  const [toAccountId, setToAccountId] = useState<string>("")
+
+  // Nilai efektif dihitung dari data nyata (bukan ID keras "bca"/"mandiri") supaya
+  // transfer tidak ditolak server ketika ID rekening/tabungan berbeda.
+  const effectiveFromGoalId = fromGoalId || savingsGoals[0]?.id || ""
+  const effectiveToGoalId =
+    toGoalId || savingsGoals.find((g) => g.id !== effectiveFromGoalId)?.id || ""
+  const effectiveFromAccountId = fromAccountId || accounts[0]?.id || ""
+  const effectiveToAccountId =
+    toAccountId || accounts.find((a) => a.id !== effectiveFromAccountId)?.id || ""
   const [accountAmount, setAccountAmount] = useState<string>("")
 
   if (!isOpen) return null
@@ -34,18 +43,18 @@ export function TransferModal({ isOpen, onClose, defaultTab = "savings" }: Trans
       alert("Harap masukkan nominal transfer yang valid!")
       return
     }
-    if (fromGoalId === toGoalId) {
+    if (effectiveFromGoalId === effectiveToGoalId) {
       alert("Tabungan asal dan tujuan tidak boleh sama!")
       return
     }
 
-    const fromGoal = savingsGoals.find((g) => g.id === fromGoalId)
+    const fromGoal = savingsGoals.find((g) => g.id === effectiveFromGoalId)
     if (!fromGoal || fromGoal.currentAmount < amt) {
       alert(`Saldo Tabungan Asal tidak mencukupi! (Tersedia: ${formatCurrency(fromGoal?.currentAmount || 0)})`)
       return
     }
 
-    const success = await transferBetweenSavings(fromGoalId, toGoalId, amt)
+    const success = await transferBetweenSavings(effectiveFromGoalId, effectiveToGoalId, amt)
     if (success) {
       setSavingsAmount("")
       onClose()
@@ -61,18 +70,18 @@ export function TransferModal({ isOpen, onClose, defaultTab = "savings" }: Trans
       alert("Harap masukkan nominal transfer yang valid!")
       return
     }
-    if (fromAccountId === toAccountId) {
+    if (effectiveFromAccountId === effectiveToAccountId) {
       alert("Akun asal dan tujuan tidak boleh sama!")
       return
     }
 
-    const fromAcc = accounts.find((a) => a.id === fromAccountId)
+    const fromAcc = accounts.find((a) => a.id === effectiveFromAccountId)
     if (!fromAcc || fromAcc.balance < amt) {
       alert(`Saldo Akun Asal tidak mencukupi! (Tersedia: ${formatCurrency(fromAcc?.balance || 0)})`)
       return
     }
 
-    const success = await transferBetweenAccounts(fromAccountId, toAccountId, amt)
+    const success = await transferBetweenAccounts(effectiveFromAccountId, effectiveToAccountId, amt)
     if (success) {
       setAccountAmount("")
       onClose()
@@ -134,7 +143,7 @@ export function TransferModal({ isOpen, onClose, defaultTab = "savings" }: Trans
                 Dari Tabungan (Asal)
               </label>
               <select
-                value={fromGoalId}
+                value={effectiveFromGoalId}
                 onChange={(e) => setFromGoalId(e.target.value)}
                 className="w-full rounded-xl border border-white/10 bg-[#111827] px-4 py-2.5 text-sm text-white focus:border-[#3B82F6] focus:outline-none"
               >
@@ -157,12 +166,12 @@ export function TransferModal({ isOpen, onClose, defaultTab = "savings" }: Trans
                 Ke Tabungan (Tujuan)
               </label>
               <select
-                value={toGoalId}
+                value={effectiveToGoalId}
                 onChange={(e) => setToGoalId(e.target.value)}
                 className="w-full rounded-xl border border-white/10 bg-[#111827] px-4 py-2.5 text-sm text-white focus:border-[#3B82F6] focus:outline-none"
               >
                 {savingsGoals
-                  .filter((g) => g.id !== fromGoalId)
+                  .filter((g) => g.id !== effectiveFromGoalId)
                   .map((g) => (
                     <option key={g.id} value={g.id}>
                       {g.name} (Terkumpul: {formatCurrency(g.currentAmount)})
@@ -205,8 +214,8 @@ export function TransferModal({ isOpen, onClose, defaultTab = "savings" }: Trans
                 Dari Rekening (Asal)
               </label>
               <select
-                value={fromAccountId}
-                onChange={(e) => setFromAccountId(e.target.value as AccountId)}
+                value={effectiveFromAccountId}
+                onChange={(e) => setFromAccountId(e.target.value)}
                 className="w-full rounded-xl border border-white/10 bg-[#111827] px-4 py-2.5 text-sm text-white focus:border-[#3B82F6] focus:outline-none"
               >
                 {accounts.map((acc) => (
@@ -228,8 +237,8 @@ export function TransferModal({ isOpen, onClose, defaultTab = "savings" }: Trans
                 Ke Rekening (Tujuan)
               </label>
               <select
-                value={toAccountId}
-                onChange={(e) => setToAccountId(e.target.value as AccountId)}
+                value={effectiveToAccountId}
+                onChange={(e) => setToAccountId(e.target.value)}
                 className="w-full rounded-xl border border-white/10 bg-[#111827] px-4 py-2.5 text-sm text-white focus:border-[#3B82F6] focus:outline-none"
               >
                 {accounts

@@ -16,11 +16,14 @@ export function SavingsSection() {
   const [name, setName] = useState("")
   const [targetAmount, setTargetAmount] = useState("")
   const [category, setCategory] = useState("Pendidikan")
-  const [accountId, setAccountId] = useState<AccountId>("bca")
+  const [accountId, setAccountId] = useState<string>("")
   const [targetDate, setTargetDate] = useState("")
 
   // Deposit Form State
   const [depositAmount, setDepositAmount] = useState("")
+
+  // Nilai efektif: pakai rekening yang benar-benar ada di database, bukan ID keras "bca".
+  const effectiveAccountId = accountId || accounts[0]?.id || ""
 
   const activeDepositGoal = savingsGoals.find((g) => g.id === depositGoalId)
 
@@ -31,13 +34,17 @@ export function SavingsSection() {
       alert("Harap isi nama target dan nominal yang valid!")
       return
     }
+    if (!effectiveAccountId) {
+      alert("Belum ada rekening aktif. Tambahkan rekening dulu di menu Master Data.")
+      return
+    }
 
     addSavingsGoal({
       name,
       targetAmount: numTarget,
       category,
       color: "#3B82F6",
-      accountId,
+      accountId: effectiveAccountId,
       targetDate: targetDate || undefined,
     })
 
@@ -196,8 +203,8 @@ export function SavingsSection() {
               <div>
                 <label className="block text-xs font-semibold text-gray-300 uppercase mb-1">Sumber Akun Utama</label>
                 <select
-                  value={accountId}
-                  onChange={(e) => setAccountId(e.target.value as AccountId)}
+                  value={effectiveAccountId}
+                  onChange={(e) => setAccountId(e.target.value)}
                   className="w-full rounded-xl border border-white/10 bg-[#111827] px-4 py-2.5 text-sm text-white focus:border-[#10B981] focus:outline-none"
                 >
                   {accounts.map((acc) => (
