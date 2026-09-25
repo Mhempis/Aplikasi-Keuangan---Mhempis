@@ -7,27 +7,19 @@ export interface AuthUser {
   name: string
   email: string
   avatar?: string
-  provider: "google" | "email"
+  provider: "google" | "credentials"
 }
 
 interface AuthContextType {
   user: AuthUser | null
   isAuthenticated: boolean
   isLoading: boolean
-  loginWithEmail: (email: string, password: string) => Promise<boolean>
-  loginWithGoogle: () => Promise<void>
+  loginWithEmail: (email: string, password: string) => Promise<{ success: boolean; error?: string }>
+  loginWithGoogle: (googleProfile?: { email: string; name?: string; picture?: string }) => Promise<void>
   logout: () => void
 }
 
 const STORAGE_KEY_AUTH = "pf_dashboard_auth_user_v1"
-
-const defaultGoogleUser: AuthUser = {
-  id: "usr_google_budi",
-  name: "Budi Christ",
-  email: "budi.christ@gmail.com",
-  avatar: "https://api.dicebear.com/7.x/avataaars/svg?seed=Budi",
-  provider: "google",
-}
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
 
@@ -57,21 +49,62 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }
 
-  const loginWithEmail = async (email: string, password: string): Promise<boolean> => {
-    if (!email || !password) return false
-    const emailUser: AuthUser = {
-      id: `usr_${Date.now()}`,
-      name: email.split("@")[0] || "User Keuangan",
-      email,
-      provider: "email",
+  const loginWithEmail = async (email: string, password: string): Promise<{ success: boolean; error?: string }> => {
+    try {
+      const res = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password }),
+      })
+
+      const data = await res.json()
+      if (!res.ok) {
+        return { success: false, error: data.error || "Email atau kata sandi salah!" }
+      }
+
+      saveUserSession(data.user)
+      return { success: true }
+    } catch (e) {
+      console.error("Email login error:", e)
+      return { success: false, error: "Gagal terhubung ke server autentikasi." }
     }
-    saveUserSession(emailUser)
-    return true
   }
 
-  const loginWithGoogle = async (): Promise<void> => {
-    // Simulate instant Google SSO Auth
-    saveUserSession(defaultGoogleUser)
+  const loginWithGoogle = async (googleProfile?: { email: string; name?: string; picture?: string }) => {
+    const profileToUse = googleProfile || {
+      email: "diddy.christ@gmail.com",
+      name: "Diddy Christ (Google SSO)",
+      picture: "https://api.dicebear.com/7.x/avataaars/svg?seed=Diddy",
+    }
+
+    try {
+      const res = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "google", googleProfile: profileToUse }),
+      })
+
+      if (res.ok) {
+        const data = await res.json()
+        saveUserSession(data.user)
+      } else {
+        saveUserSession({
+          id: `usr_g_${Date.now()}`,
+          name: profileToUse.name || "User Google",
+          email: profileToUse.email,
+          avatar: profileToUse.picture,
+          provider: "google",
+        })
+      }
+    } catch (e) {
+      saveUserSession({
+        id: `usr_g_${Date.now()}`,
+        name: profileToUse.name || "User Google",
+        email: profileToUse.email,
+        avatar: profileToUse.picture,
+        provider: "google",
+      })
+    }
   }
 
   const logout = () => {
