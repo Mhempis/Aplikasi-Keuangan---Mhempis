@@ -16,6 +16,11 @@ import {
   CATEGORY_COLORS,
 } from "./finance-data"
 
+const STORAGE_KEY_ACCOUNTS = "pf_dashboard_accounts_v1"
+const STORAGE_KEY_TRANSACTIONS = "pf_dashboard_transactions_v1"
+const STORAGE_KEY_SAVINGS = "pf_dashboard_savings_v1"
+const STORAGE_KEY_CATEGORIES = "pf_dashboard_categories_v1"
+
 interface FinanceContextType {
   accounts: Account[]
   transactions: Transaction[]
@@ -48,19 +53,53 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
   const [transactions, setTransactions] = useState<Transaction[]>(initialTransactions)
   const [savingsGoals, setSavingsGoals] = useState<SavingsGoal[]>(initialSavingsGoals)
   const [categories, setCategories] = useState<CategoryItem[]>(initialCategories)
+  const [isLoaded, setIsLoaded] = useState(false)
 
+  // 1. Initial load from LocalStorage first for instant UI response
+  useEffect(() => {
+    try {
+      const savedAccounts = localStorage.getItem(STORAGE_KEY_ACCOUNTS)
+      const savedTx = localStorage.getItem(STORAGE_KEY_TRANSACTIONS)
+      const savedSavings = localStorage.getItem(STORAGE_KEY_SAVINGS)
+      const savedCategories = localStorage.getItem(STORAGE_KEY_CATEGORIES)
+
+      if (savedAccounts) setAccounts(JSON.parse(savedAccounts))
+      if (savedTx) setTransactions(JSON.parse(savedTx))
+      if (savedSavings) setSavingsGoals(JSON.parse(savedSavings))
+      if (savedCategories) setCategories(JSON.parse(savedCategories))
+    } catch (e) {
+      console.error("Failed to load local finance data:", e)
+    } finally {
+      setIsLoaded(true)
+    }
+  }, [])
+
+  // 2. Sync to LocalStorage on every state update
+  useEffect(() => {
+    if (!isLoaded) return
+    try {
+      localStorage.setItem(STORAGE_KEY_ACCOUNTS, JSON.stringify(accounts))
+      localStorage.setItem(STORAGE_KEY_TRANSACTIONS, JSON.stringify(transactions))
+      localStorage.setItem(STORAGE_KEY_SAVINGS, JSON.stringify(savingsGoals))
+      localStorage.setItem(STORAGE_KEY_CATEGORIES, JSON.stringify(categories))
+    } catch (e) {
+      console.error("Failed to save local finance data:", e)
+    }
+  }, [accounts, transactions, savingsGoals, categories, isLoaded])
+
+  // 3. Optional sync from SQLite API
   const fetchFinanceData = useCallback(async () => {
     try {
       const res = await fetch("/api/finance")
       if (res.ok) {
         const data = await res.json()
-        if (data.accounts) setAccounts(data.accounts)
-        if (data.transactions) setTransactions(data.transactions)
-        if (data.savingsGoals) setSavingsGoals(data.savingsGoals)
+        if (data.accounts && data.accounts.length > 0) setAccounts(data.accounts)
+        if (data.transactions && data.transactions.length > 0) setTransactions(data.transactions)
+        if (data.savingsGoals && data.savingsGoals.length > 0) setSavingsGoals(data.savingsGoals)
         if (data.categories && data.categories.length > 0) setCategories(data.categories)
       }
     } catch (e) {
-      console.error("Failed to fetch SQLite finance data:", e)
+      console.log("SQLite API fallback to local state")
     }
   }, [])
 
@@ -68,177 +107,266 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
     fetchFinanceData()
   }, [fetchFinanceData])
 
+  // Actions: Optimistic Instant UI Update + Background API Sync
   const addTransaction = async (newTxData: Omit<Transaction, "id" | "date" | "status">) => {
+    const now = new Date().toISOString()
+    const newTx: Transaction = {
+      ...newTxData,
+      id: `t_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      date: now,
+      status: "completed",
+    }
+
+    // Immediate UI Update
+    setTransactions((prev) => [newTx, ...prev])
+    setAccounts((prev) =>
+      prev.map((acc) => {
+        if (acc.id === newTxData.accountId) {
+          const delta = newTxData.type === "income" ? newTxData.amount : -newTxData.amount
+          return { ...acc, balance: Math.max(0, acc.balance + delta), updatedAt: now }
+        }
+        return acc
+      })
+    )
+
+    // Background API Sync
     try {
-      const res = await fetch("/api/transactions", {
+      await fetch("/api/transactions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(newTxData),
       })
-      if (res.ok) {
-        await fetchFinanceData()
-      }
     } catch (e) {
-      console.error("Error adding transaction:", e)
+      console.log("Background API sync error:", e)
     }
   }
 
   const deleteTransaction = async (id: string) => {
+    const tx = transactions.find((t) => t.id === id)
+    if (!tx) return
+
+    // Immediate UI Update
+    setTransactions((prev) => prev.filter((t) => t.id !== id))
+    setAccounts((prev) =>
+      prev.map((acc) => {
+        if (acc.id === tx.accountId) {
+          const delta = tx.type === "income" ? -tx.amount : tx.amount
+          return { ...acc, balance: Math.max(0, acc.balance + delta), updatedAt: new Date().toISOString() }
+        }
+        return acc
+      })
+    )
+
+    // Background API Sync
     try {
-      const res = await fetch(`/api/transactions?id=${id}`, { method: "DELETE" })
-      if (res.ok) {
-        await fetchFinanceData()
-      }
+      await fetch(`/api/transactions?id=${id}`, { method: "DELETE" })
     } catch (e) {
-      console.error("Error deleting transaction:", e)
+      console.log("Background API sync error:", e)
     }
   }
 
   const addSavingsGoal = async (newGoal: Omit<SavingsGoal, "id" | "currentAmount">) => {
+    const goal: SavingsGoal = {
+      ...newGoal,
+      id: `s_${Date.now()}`,
+      currentAmount: 0,
+    }
+    setSavingsGoals((prev) => [...prev, goal])
+
     try {
-      const res = await fetch("/api/savings", {
+      await fetch("/api/savings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(newGoal),
       })
-      if (res.ok) {
-        await fetchFinanceData()
-      }
     } catch (e) {
-      console.error("Error adding savings goal:", e)
+      console.log("Background API sync error:", e)
     }
   }
 
   const depositToSavings = async (goalId: string, amount: number) => {
+    const goal = savingsGoals.find((g) => g.id === goalId)
+    if (!goal || amount <= 0) return
+
+    setSavingsGoals((prev) =>
+      prev.map((g) => (g.id === goalId ? { ...g, currentAmount: g.currentAmount + amount } : g))
+    )
+
+    await addTransaction({
+      description: `Setoran Tabungan: ${goal.name}`,
+      category: "Investasi & Dividen",
+      amount,
+      type: "expense",
+      accountId: goal.accountId,
+    })
+
     try {
-      const res = await fetch("/api/savings", {
+      await fetch("/api/savings", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ type: "deposit", goalId, amount }),
       })
-      if (res.ok) {
-        await fetchFinanceData()
-      }
     } catch (e) {
-      console.error("Error depositing to savings:", e)
+      console.log("Background API sync error:", e)
     }
   }
 
   const transferBetweenSavings = async (fromGoalId: string, toGoalId: string, amount: number): Promise<boolean> => {
+    if (fromGoalId === toGoalId || amount <= 0) return false
+    const fromGoal = savingsGoals.find((g) => g.id === fromGoalId)
+    const toGoal = savingsGoals.find((g) => g.id === toGoalId)
+
+    if (!fromGoal || !toGoal) return false
+    if (fromGoal.currentAmount < amount) return false
+
+    setSavingsGoals((prev) =>
+      prev.map((g) => {
+        if (g.id === fromGoalId) return { ...g, currentAmount: g.currentAmount - amount }
+        if (g.id === toGoalId) return { ...g, currentAmount: g.currentAmount + amount }
+        return g
+      })
+    )
+
     try {
-      const res = await fetch("/api/savings", {
+      await fetch("/api/savings", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ type: "transfer", fromGoalId, toGoalId, amount }),
       })
-      if (res.ok) {
-        await fetchFinanceData()
-        return true
-      }
-      return false
     } catch (e) {
-      console.error("Error transferring savings:", e)
-      return false
+      console.log("Background API sync error:", e)
     }
+
+    return true
   }
 
   const transferBetweenAccounts = async (fromAccountId: AccountId, toAccountId: AccountId, amount: number): Promise<boolean> => {
+    if (fromAccountId === toAccountId || amount <= 0) return false
+    const fromAcc = accounts.find((a) => a.id === fromAccountId)
+    const toAcc = accounts.find((a) => a.id === toAccountId)
+
+    if (!fromAcc || !toAcc) return false
+    if (fromAcc.balance < amount) return false
+
+    const now = new Date().toISOString()
+    setAccounts((prev) =>
+      prev.map((acc) => {
+        if (acc.id === fromAccountId) return { ...acc, balance: acc.balance - amount, updatedAt: now }
+        if (acc.id === toAccountId) return { ...acc, balance: acc.balance + amount, updatedAt: now }
+        return acc
+      })
+    )
+
     try {
-      const res = await fetch("/api/accounts", {
+      await fetch("/api/accounts", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ fromAccountId, toAccountId, amount }),
       })
-      if (res.ok) {
-        await fetchFinanceData()
-        return true
-      }
-      return false
     } catch (e) {
-      console.error("Error transferring accounts:", e)
-      return false
+      console.log("Background API sync error:", e)
     }
+
+    return true
   }
 
   const addAccount = async (name: string, initialBalance: number) => {
+    const id = `acc_${Date.now()}`
+    const newAcc: Account = {
+      id,
+      name,
+      balance: Math.max(0, initialBalance),
+      updatedAt: new Date().toISOString(),
+    }
+    setAccounts((prev) => [...prev, newAcc])
+
     try {
-      const res = await fetch("/api/accounts", {
+      await fetch("/api/accounts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name, balance: initialBalance }),
       })
-      if (res.ok) {
-        await fetchFinanceData()
-      }
     } catch (e) {
-      console.error("Error adding account:", e)
+      console.log("Background API sync error:", e)
     }
   }
 
   const editAccount = async (id: AccountId, name: string, balance: number) => {
+    setAccounts((prev) =>
+      prev.map((acc) => (acc.id === id ? { ...acc, name, balance: Math.max(0, balance), updatedAt: new Date().toISOString() } : acc))
+    )
+
     try {
-      const res = await fetch("/api/accounts", {
+      await fetch("/api/accounts", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ id, name, balance }),
       })
-      if (res.ok) {
-        await fetchFinanceData()
-      }
     } catch (e) {
-      console.error("Error editing account:", e)
+      console.log("Background API sync error:", e)
     }
   }
 
   const deleteAccount = async (id: AccountId) => {
+    if (accounts.length <= 1) {
+      alert("Tidak bisa menghapus semua rekening! Minimal harus ada 1 rekening aktif.")
+      return
+    }
+    setAccounts((prev) => prev.filter((acc) => acc.id !== id))
+
     try {
-      const res = await fetch(`/api/accounts?id=${id}`, { method: "DELETE" })
-      if (res.ok) {
-        await fetchFinanceData()
-      }
+      await fetch(`/api/accounts?id=${id}`, { method: "DELETE" })
     } catch (e) {
-      console.error("Error deleting account:", e)
+      console.log("Background API sync error:", e)
     }
   }
 
   const addCategory = async (name: string, type: TransactionType, color: string = "#3B82F6") => {
+    const exists = categories.some((c) => c.name.toLowerCase() === name.toLowerCase() && c.type === type)
+    if (exists) {
+      alert("Kategori dengan nama ini sudah ada!")
+      return
+    }
+    setCategories((prev) => [...prev, { name, type, color }])
+
     try {
-      const res = await fetch("/api/categories", {
+      await fetch("/api/categories", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name, type, color }),
       })
-      if (res.ok) {
-        await fetchFinanceData()
-      }
     } catch (e) {
-      console.error("Error adding category:", e)
+      console.log("Background API sync error:", e)
     }
   }
 
   const deleteCategory = async (name: string, type: TransactionType) => {
+    setCategories((prev) => prev.filter((c) => !(c.name === name && c.type === type)))
+
     try {
-      const res = await fetch(`/api/categories?name=${encodeURIComponent(name)}&type=${type}`, { method: "DELETE" })
-      if (res.ok) {
-        await fetchFinanceData()
-      }
+      await fetch(`/api/categories?name=${encodeURIComponent(name)}&type=${type}`, { method: "DELETE" })
     } catch (e) {
-      console.error("Error deleting category:", e)
+      console.log("Background API sync error:", e)
     }
   }
 
   const resetToDefaultData = async () => {
+    setAccounts(initialAccounts)
+    setTransactions(initialTransactions)
+    setSavingsGoals(initialSavingsGoals)
+    setCategories(initialCategories)
     try {
-      const res = await fetch("/api/finance", {
+      localStorage.removeItem(STORAGE_KEY_ACCOUNTS)
+      localStorage.removeItem(STORAGE_KEY_TRANSACTIONS)
+      localStorage.removeItem(STORAGE_KEY_SAVINGS)
+      localStorage.removeItem(STORAGE_KEY_CATEGORIES)
+      await fetch("/api/finance", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "reset" }),
       })
-      if (res.ok) {
-        await fetchFinanceData()
-      }
     } catch (e) {
-      console.error("Error resetting database:", e)
+      console.log("Background API sync error:", e)
     }
   }
 
