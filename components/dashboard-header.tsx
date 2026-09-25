@@ -1,9 +1,10 @@
 "use client"
 
 import { useState } from "react"
-import { ShieldCheck, Settings, RefreshCw, LogOut } from "lucide-react"
+import { ShieldCheck, Settings, RefreshCw, LogOut, Eye, EyeOff } from "lucide-react"
 import { useFinance } from "@/lib/finance-context"
 import { useAuth } from "@/lib/auth-context"
+import { useVisibility } from "@/lib/visibility-context"
 import { MasterDataModal } from "./master-data-modal"
 
 /**
@@ -14,6 +15,7 @@ import { MasterDataModal } from "./master-data-modal"
 export function DashboardHeader() {
   const { resetToDefaultData } = useFinance()
   const { user, logout } = useAuth()
+  const { isAmountVisible, toggleAmountVisibility } = useVisibility()
   const [isMasterModalOpen, setIsMasterModalOpen] = useState(false)
 
   const handleReset = () => {
@@ -22,7 +24,7 @@ export function DashboardHeader() {
     }
   }
 
-  const displayName = user?.name || "Budi & Keluarga"
+  const displayName = user?.name || "User"
   const displayEmail = user?.email || ""
 
   return (
@@ -40,6 +42,14 @@ export function DashboardHeader() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={toggleAmountVisibility}
+            className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs font-medium text-gray-300 transition-colors hover:bg-white/10 hover:text-white"
+            title={isAmountVisible ? "Sembunyikan nominal" : "Tampilkan nominal"}
+          >
+            {isAmountVisible ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+            {isAmountVisible ? "Sembunyikan" : "Tampilkan"}
+          </button>
           <button
             onClick={() => setIsMasterModalOpen(true)}
             className="inline-flex items-center gap-2 rounded-xl bg-[#3B82F6] px-3.5 py-2 text-xs font-bold text-white shadow transition-colors hover:bg-[#3B82F6]/90"

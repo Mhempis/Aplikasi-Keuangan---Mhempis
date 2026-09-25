@@ -2,6 +2,7 @@
 
 import { Landmark, Wallet, Smartphone, Banknote } from "lucide-react"
 import { useFinance } from "@/lib/finance-context"
+import { useVisibility } from "@/lib/visibility-context"
 import { formatCurrency, formatRelative, type AccountId } from "@/lib/finance-data"
 
 const icons: Record<AccountId, typeof Landmark> = {
@@ -13,6 +14,12 @@ const icons: Record<AccountId, typeof Landmark> = {
 
 export function BalanceCards() {
   const { accounts } = useFinance()
+  const { isAmountVisible } = useVisibility()
+
+  const formatAmount = (amount: number) => {
+    if (!isAmountVisible) return "••••••"
+    return formatCurrency(amount)
+  }
 
   return (
     <section aria-label="Saldo akun" className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -29,7 +36,7 @@ export function BalanceCards() {
                 <Icon className="size-5" aria-hidden="true" />
               </span>
             </div>
-            <p className="mt-4 text-2xl font-bold text-[#10B981]">{formatCurrency(account.balance)}</p>
+            <p className="mt-4 text-2xl font-bold text-[#10B981]">{formatAmount(account.balance)}</p>
             <p className="mt-1 text-xs text-gray-400">Diperbarui {formatRelative(account.updatedAt)}</p>
           </article>
         )

@@ -1,29 +1,34 @@
 "use client"
 
-import { Wallet, TrendingUp, TrendingDown, ShieldCheck } from "lucide-react"
+import { Wallet, TrendingUp, TrendingDown } from "lucide-react"
 import { useFinance } from "@/lib/finance-context"
+import { useVisibility } from "@/lib/visibility-context"
 import { formatCurrency } from "@/lib/finance-data"
 
 const cards = [
   { key: "net", label: "Kekayaan Bersih", icon: Wallet, tone: "text-[#3B82F6]", bg: "bg-[#3B82F6]/15" },
   { key: "income", label: "Pemasukan", icon: TrendingUp, tone: "text-[#10B981]", bg: "bg-[#10B981]/15" },
   { key: "expense", label: "Pengeluaran", icon: TrendingDown, tone: "text-[#EF4444]", bg: "bg-[#EF4444]/15" },
-  { key: "savings", label: "Tabungan", icon: ShieldCheck, tone: "text-[#8B5CF6]", bg: "bg-[#8B5CF6]/15" },
 ] as const
 
-/** Ringkasan angka ringkas — 4 kartu kecil dalam satu baris. */
+/** Ringkasan angka ringkas — 3 kartu kecil dalam satu baris. */
 export function SummaryStats() {
-  const { totalBalance, totalIncome, totalExpense, totalSavings } = useFinance()
+  const { totalBalance, totalIncome, totalExpense } = useFinance()
+  const { isAmountVisible } = useVisibility()
 
   const values: Record<(typeof cards)[number]["key"], number> = {
     net: totalBalance,
     income: totalIncome,
     expense: totalExpense,
-    savings: totalSavings,
+  }
+
+  const formatAmount = (amount: number) => {
+    if (!isAmountVisible) return "••••••"
+    return formatCurrency(amount)
   }
 
   return (
-    <section aria-label="Ringkasan keuangan" className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+    <section aria-label="Ringkasan keuangan" className="grid grid-cols-1 gap-3 sm:grid-cols-3">
       {cards.map((card) => {
         const Icon = card.icon
         return (
@@ -36,7 +41,7 @@ export function SummaryStats() {
             </span>
             <div className="min-w-0">
               <p className="truncate text-[11px] font-medium text-gray-400">{card.label}</p>
-              <p className={`truncate text-base font-bold ${card.tone}`}>{formatCurrency(values[card.key])}</p>
+              <p className={`truncate text-base font-bold ${card.tone}`}>{formatAmount(values[card.key])}</p>
             </div>
           </article>
         )
