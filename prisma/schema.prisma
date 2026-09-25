@@ -1,0 +1,51 @@
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model Account {
+  id        String   @id
+  name      String
+  balance   Float
+  updatedAt DateTime @default(now()) @updatedAt
+
+  transactions Transaction[]
+  savingsGoals SavingsGoal[]
+}
+
+model Transaction {
+  id          String   @id
+  date        DateTime @default(now())
+  description String
+  category    String
+  amount      Float
+  type        String
+  status      String   @default("completed")
+  accountId   String
+  account     Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+}
+
+model SavingsGoal {
+  id            String    @id
+  name          String
+  targetAmount  Float
+  currentAmount Float     @default(0)
+  targetDate    DateTime?
+  category      String
+  color         String    @default("#3B82F6")
+  accountId     String
+  account       Account   @relation(fields: [accountId], references: [id], onDelete: Cascade)
+}
+
+model CategoryItem {
+  id    String @id @default(cuid())
+  name  String
+  type  String
+  color String @default("#3B82F6")
+
+  @@unique([name, type])
+}

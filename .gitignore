@@ -1,0 +1,27 @@
+# Next.js & Node
+node_modules
+.next/
+out/
+build/
+dist/
+
+# Prisma & SQLite databases
+prisma/*.db
+prisma/*.db-journal
+*.db
+
+# Environment variables
+.env
+.env*.local
+
+# macOS & System
+.DS_Store
+*.log
+
+# v0 sandbox internal files
+__v0_runtime_loader.js
+__v0_devtools.tsx
+__v0_jsx-dev-runtime.ts
+.snowflake/
+.v0-trash/
+.vercel/
